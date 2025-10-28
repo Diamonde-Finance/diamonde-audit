@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-// 定义 RootDispatch 合约的接口
 
 interface IRootDispatch {
     function getSubContractAddress(string memory _name) external view returns (address);
@@ -22,18 +21,16 @@ contract AMD {
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 
-    // 部署时指定代币名称、符号和初始供应量
     constructor(string memory _name, string memory _symbol, address _owner) {
         name = _name;
         symbol = _symbol;
         owner = _owner;
         admin = msg.sender;
-        totalSupply = 0; // 正确初始化
+        totalSupply = 0;
         burnSupply = 0;
         manager = IRootDispatch(owner).getSubContractAddress("TREASURY");
         require(manager != address(0), "Invalid manager address");
     }
-    // 转账函数
 
     function transfer(address to, uint256 value) external returns (bool) {
         require(balanceOf[msg.sender] >= value, "Insufficient balance");
@@ -42,7 +39,6 @@ contract AMD {
         emit Transfer(msg.sender, to, value);
         return true;
     }
-    // 授权函数
 
     function approve(address spender, uint256 value) external returns (bool) {
         allowance[msg.sender][spender] = value;
@@ -50,7 +46,6 @@ contract AMD {
         return true;
     }
 
-    // 授权转账函数
     function transferFrom(address from, address to, uint256 value) external returns (bool) {
         require(balanceOf[from] >= value, "Insufficient balance");
         require(allowance[from][msg.sender] >= value, "Allowance exceeded");
@@ -78,7 +73,6 @@ contract AMD {
         balanceOf[from] -= value;
         burnSupply += value;
     }
-    // 私有铸造函数（仅部署时使用）
 
     function _mint(address to, uint256 value) private returns (bool) {
         balanceOf[to] += value;
@@ -86,7 +80,6 @@ contract AMD {
         emit Transfer(address(0), to, value);
         return true;
     }
-    // 可选：测试时快速增发代币（仅供测试用！）
 
     function mint(address to, uint256 value) external onlyAuthorized returns (bool) {
         if (totalSupply + value <= 210000 * 1e6) {

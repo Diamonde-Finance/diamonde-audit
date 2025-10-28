@@ -13,7 +13,6 @@ interface IERC20 {
 
     function balanceOf(address account) external view returns (uint256);
 
-    /* IERC20 标准事件 */
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }
@@ -28,7 +27,6 @@ interface IMint {
 
 /* ──────── Library ──────── */
 library TokenUtils {
-    /// @notice 对地址进行排序，保证 pair 唯一性
     function sortTokens(
         address tokenA,
         address tokenB
@@ -55,16 +53,13 @@ library TokenUtils {
 /* ──────────────────────────────── UniswapV2Pair ──────────────────────────────── */
 contract UniswapV2Pair is ReentrancyGuard {
 
-    // 新增白名单
     mapping(address => bool) public feeWhitelist;
-    // 新增函数：设置白名单，仅限 factory 调用
     function setFeeWhitelist(address account, bool status) external onlyFactory {
         feeWhitelist[account] = status;
     }
 
 
     using SafeMath for uint256;
-    /* ---- 公共只读变量（与 Uniswap V2 对齐） ---- */
     address public factory;
     address public router;
     address public treasury;
@@ -74,13 +69,12 @@ contract UniswapV2Pair is ReentrancyGuard {
     string public constant name = "Uniswap V2";
     string public constant symbol = "UNI-V2";
     uint8 public constant decimals = 6;
-    /* 以 uint112 保存以兼容 Uniswap V2 getReserves 返回值 */
     uint112 private reserve0;
     uint112 private reserve1;
-    uint32  private blockTimestampLast;       // --- patched: 记录最后一次更新时间戳 (<=2^32‑1)
+    uint32  private blockTimestampLast;
     uint256 public lastSwapBlock;
-    uint256 public totalSupply;                         // LP 总量
-    mapping(address => uint256) public balanceOf;       // LP 余额
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
@@ -95,16 +89,15 @@ contract UniswapV2Pair is ReentrancyGuard {
         uint256 amount1Out,
         address indexed to
     ); // --- patched
-    event Sync(uint112 reserve0, uint112 reserve1);     // --- patched (Uniswap 标准)
+    event Sync(uint112 reserve0, uint112 reserve1);     // --- patched
     // event ReservesUpdated(uint256 reserve0, uint256 reserve1);
 
     uint256 private constant MINIMUM_LIQUIDITY = 1_000;
 
-    /* ---- 手续费记账 ---- */
     uint256 public constant FEE_NUMERATOR = 25;       // 0.25%
     uint256 public constant FEE_DENOMINATOR = 10_000;
 
-    uint256 public accFee0PerShare;   // 1e12 精度
+    uint256 public accFee0PerShare;   // 1e12
     uint256 public accFee1PerShare;
     uint256 public totalFee0;
     uint256 public totalFee1;
@@ -112,17 +105,15 @@ contract UniswapV2Pair is ReentrancyGuard {
     mapping(address => uint256) public userFee0Debt;
     mapping(address => uint256) public userFee1Debt;
 
-    /* ---- 构造 ---- */
     constructor() {factory = msg.sender;}
 
-    /* ---- 初始化 ---- */
     function initialize(address _token0, address _token1) external onlyFactory {
         require(token0 == address(0) && token1 == address(0), "Already initialized");
         token0 = _token0;
         token1 = _token1;
     }
     /* ====================================================================== *
-                                │  设置 treasury / router / autoForwarder │
+                                │  treasury / router / autoForwarder │
      * ====================================================================== */
     function setRouter(address _router) external onlyFactory {
         require(_router != address(0), "invalid address");
@@ -140,10 +131,9 @@ contract UniswapV2Pair is ReentrancyGuard {
     }
 
     /* ====================================================================== *
-                                │  LP 铸造 / 销毁 │
+                                │  LP │
      * ====================================================================== */
     function mint(address to) external onlyAuthorized nonReentrant returns (uint256 liquidity) {
-        // 防止价格操纵：不能在 swap 后的同一个区块内进行 mint
         require(block.number > lastSwapBlock || to == treasury || to == autoForwarder, "No mint in same block as swap");
         uint256 _reserve0 = reserve0;
         uint256 _reserve1 = reserve1;
@@ -154,10 +144,10 @@ contract UniswapV2Pair is ReentrancyGuard {
 
         if (totalSupply == 0) {
             uint256 product;
-            unchecked {product = amount0 * amount1;}   // ← 不检查乘法
+            unchecked {product = amount0 * amount1;}
             liquidity = sqrt(product);
             require(liquidity > MINIMUM_LIQUIDITY, "Insufficient liquidity");
-            unchecked {liquidity -= MINIMUM_LIQUIDITY;} // ← 不检查下溢
+            unchecked {liquidity -= MINIMUM_LIQUIDITY;}
             _mint(address(0), MINIMUM_LIQUIDITY);
         } else {
             liquidity = min(
@@ -167,7 +157,7 @@ contract UniswapV2Pair is ReentrancyGuard {
             require(liquidity > 0, "Insufficient liquidity");
         }
         if (balanceOf[to] > 0) {
-            _updateFee(to); // 结算旧的
+            _updateFee(to);
         }
         _mint(to, liquidity);
         userFee0Debt[to] = (balanceOf[to].mul(accFee0PerShare)).div(1e12);
@@ -225,19 +215,17 @@ contract UniswapV2Pair is ReentrancyGuard {
         uint256 fee0 = 0;
         uint256 fee1 = 0;
 
-        // 修改 swap 函数内手续费逻辑 包含白名单 pass：
-        if (amount0In > 0 && to != treasury && !feeWhitelist[to]) { // 加入白名单判断
+        if (amount0In > 0 && to != treasury && !feeWhitelist[to]) {
             fee0 = (amount0In.mul(FEE_NUMERATOR)).div(FEE_DENOMINATOR);
             totalFee0 += fee0;
             if (totalSupply > 0) accFee0PerShare += fee0.mul(1e12).div(totalSupply);
         }
-        if (amount1In > 0 && to != treasury && !feeWhitelist[to]) { // 加入白名单判断
+        if (amount1In > 0 && to != treasury && !feeWhitelist[to]) {
             fee1 = (amount1In.mul(FEE_NUMERATOR)).div(FEE_DENOMINATOR);
             totalFee1 += fee1;
             if (totalSupply > 0) accFee1PerShare += fee1.mul(1e12).div(totalSupply);
         }
 
-        // 旧的手续费逻辑
         // if (amount0In > 0 && to != treasury) {
         //     fee0 = (amount0In.mul(FEE_NUMERATOR)).div(FEE_DENOMINATOR);
         //     if (totalSupply > 0) accFee0PerShare += fee0.mul(1e12).div(totalSupply);
@@ -247,7 +235,6 @@ contract UniswapV2Pair is ReentrancyGuard {
         //     if (totalSupply > 0) accFee1PerShare += fee1.mul(1e12).div(totalSupply);
         // }
 
-        // 修改调整余额计算逻辑
         uint256 balance0Adj = balance0 .mul(FEE_DENOMINATOR) - fee0.mul(FEE_DENOMINATOR - FEE_NUMERATOR);
         uint256 balance1Adj = balance1 .mul(FEE_DENOMINATOR) - fee1.mul(FEE_DENOMINATOR - FEE_NUMERATOR);
 
@@ -255,7 +242,6 @@ contract UniswapV2Pair is ReentrancyGuard {
         //     balance0Adj * balance1Adj >= uint256(reserve0) * uint256(reserve1) * (FEE_DENOMINATOR ** 2),
         //     "K invariant"
         // );
-        // 计算右侧时显式处理精度
 
         require(
             balance0Adj.mul(balance1Adj) >= uint256(reserve0)
@@ -267,7 +253,7 @@ contract UniswapV2Pair is ReentrancyGuard {
 
 
         _update(balance0 - fee0, balance1 - fee1);
-        lastSwapBlock = block.number; // 记录 swap 的 block number
+        lastSwapBlock = block.number;
         emit Swap(
             msg.sender,
             amount0In,
@@ -279,7 +265,6 @@ contract UniswapV2Pair is ReentrancyGuard {
         // emit ReservesUpdated(reserve0, reserve1);
     }
 
-    /* ---- 兼容 Uniswap V2 的辅助函数 ---- */
     function skim(address to) external nonReentrant onlyAuthorized { // --- patched
         _safeTransfer(token0, to, IERC20(token0).balanceOf(address(this)) - reserve0);
         _safeTransfer(token1, to, IERC20(token1).balanceOf(address(this)) - reserve1);
@@ -293,16 +278,13 @@ contract UniswapV2Pair is ReentrancyGuard {
         // emit ReservesUpdated(reserve0, reserve1);
     }
 
-    /* ---- 手续费结算 ---- */
     function _updateFee(address user) internal {
         uint256 liqu = balanceOf[user];
         if (liqu == 0 || totalSupply == 0) return;
 
-        // 计算当前应得费用
         uint256 currentFee0 = liqu.mul(accFee0PerShare).div(1e12);
         uint256 currentFee1 = liqu.mul(accFee1PerShare).div(1e12);
 
-        // 处理负值（若应得费用 < 历史债务，则 pending = 0）
         uint256 pending0 = currentFee0 > userFee0Debt[user] ? currentFee0 - userFee0Debt[user] : 0;
         uint256 pending1 = currentFee1 > userFee1Debt[user] ? currentFee1 - userFee1Debt[user] : 0;
 
@@ -320,7 +302,6 @@ contract UniswapV2Pair is ReentrancyGuard {
     }
 
     /* ---- View ---- */
-    /// @notice 与 Uniswap V2 相同签名，多返回一个时间戳，旧调用只取前两项可向后兼容
     function getReserves() external view returns (uint112, uint112, uint32) { // --- patched
         return (reserve0, reserve1, blockTimestampLast);
     }
@@ -361,7 +342,6 @@ contract UniswapV2Pair is ReentrancyGuard {
         return true;
     }
 
-    /* ---- 内部工具 ---- */
     function _update(uint256 bal0, uint256 bal1) private {
         reserve0 = uint112(bal0);
         reserve1 = uint112(bal1);
@@ -378,7 +358,6 @@ contract UniswapV2Pair is ReentrancyGuard {
         require(ok && (data.length == 0 || abi.decode(data, (bool))), "Transfer failed");
     }
 
-    /* ---- 数学工具 ---- */
     function sqrt(uint256 y) private pure returns (uint256 z) {
         if (y > 3) {
             z = y;
@@ -390,7 +369,7 @@ contract UniswapV2Pair is ReentrancyGuard {
 
     function min(uint256 a, uint256 b) private pure returns (uint256) {return a < b ? a : b;}
 
-    /* ---- ERC‑20 内部 _mint / _burn ---- */
+    /* ---- ERC‑20 _mint / _burn ---- */
     function _mint(address to, uint256 value) private {
         balanceOf[to] += value;
         totalSupply += value;
@@ -403,7 +382,6 @@ contract UniswapV2Pair is ReentrancyGuard {
         emit Transfer(from, address(0), value);
     }
 
-    /* ---- 修饰符 ---- */
     modifier onlyFactory()    {require(msg.sender == factory, "Only Factory");
         _;}
     modifier onlyAuthorized() {require(msg.sender == factory || msg.sender == router, "Unauthorized");
@@ -427,7 +405,6 @@ contract UniswapV2Factory {
         manager = msg.sender;
     }
 
-    // 在Factory中设置白名单，限 Manager 调用
     function setPairFeeWhitelist(address _pair, address _account, bool _status) external onlyManager {
         UniswapV2Pair(_pair).setFeeWhitelist(_account, _status);
         emit FeeWhitelistUpdated(_pair, _account, _status);
@@ -468,7 +445,6 @@ contract UniswapV2Factory {
         return getPair[token0][token1];
     }
 
-    /* ---- 修饰符 ---- */
     modifier onlyManager() {
         require(msg.sender == manager, "Only Manager");
         _;
@@ -505,7 +481,7 @@ contract UniswapV2Router is ReentrancyGuard {
     }
 
     /* ====================================================================== *
-                                │  添加流动性 │
+                                │  Add Liquidity │
      * ====================================================================== */
     function addLiquidity(
         address tokenA,
@@ -525,7 +501,6 @@ contract UniswapV2Router is ReentrancyGuard {
         (address token0, address token1) = TokenUtils.sortTokens(tokenA, tokenB);
         address pair = UniswapV2Factory(factory).getPair(token0, token1);
         if (pair == address(0)) pair = UniswapV2Factory(factory).createPair(tokenA, tokenB);
-        // 4. 同步储备
         UniswapV2Pair(pair).sync();
         (uint256 amountA, uint256 amountB) = _calculateLiquidity(tokenA, tokenB, amountADesired, amountBDesired);
 
@@ -607,7 +582,6 @@ contract UniswapV2Router is ReentrancyGuard {
         uint256 deadline
     ) private returns (uint256[] memory amounts) {
         require(deadline >= block.timestamp, "EXPIRED");
-        // 防止恶意长路径攻击
         require(path.length == 2, "Invalid path");
 
         (address token0, address token1) = TokenUtils.sortTokens(path[0], path[1]);
@@ -620,7 +594,6 @@ contract UniswapV2Router is ReentrancyGuard {
         require(amounts[amounts.length - 1] >= amountOutMin, "Slippage exceeded");
         _swap(amounts, path, to);
 
-        // 根据 DIA‑TOKEN / 目标汇率自动平衡
         if (path[0] == IRootDispatch(owner).getSubContractAddress("DIA_TOKEN")) {
             (uint256 reserve0, uint256 reserve1) = _getReservesSorted([path[0], path[1]]);
             if (getExchangeRate(reserve0, reserve1) < 1e6) {
